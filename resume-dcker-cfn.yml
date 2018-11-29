@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Resume Docker Cluster"
+Parameters:
+  InstanceTypeParameter:
+    Type: String
+    Default: t2.micro
+    Description: Instance type value.
+
+  ResumeClusterKeyPairName:
+    Type: "AWS::EC2::KeyPair::KeyName"
+    Description: AMI key
+
+  ResumeClusterSubnetID :
+    Description : 'EC2 Instance Subnet ID'
+    Type : "AWS::EC2::Subnet::Id"
+
+  ResumeClusterVPC:
+    Description : 'VPC ID'
+    Type : "AWS::EC2::VPC::Id"
+
+  ResumeClusterSecurityGroups:
+    Description : 'Security Groups Ids'
+    Type : "List<AWS::EC2::SecurityGroup::Id>"
+
+  ECRUiUrl:
+    Type: String
+    Description: 'ECR Url for Resume UI'
+    Default: 'ECRUrlUi'
+
+  ECRApiUrl:
+    Type: String
+    Description: 'ECR Url for Resume API'
+    Default: 'ECRUrlApi'
+
+Mappings:
+  AWSRegion2AMI:
+    us-west-2:
+      amzLinux: ami-6cd6f714
+
+
+Resources:
+
+  roleECRAccess:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+          -
+            PolicyName: "ECRAccesss"
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                -
+                  Effect: "Allow"
+                  Action: "ecr:*"
+                  Resource:
+                    - "*"
+  ECRInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+        - Ref: roleECRAccess
+
+  AsteriskClusterEC2:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      IamInstanceProfile:
+          Ref: ECRInstanceProfile
+      InstanceType:
+        Ref: InstanceTypeParameter
+      ImageId: !FindInMap
+        - AWSRegion2AMI
+        - !Ref 'AWS::Region'
+        - amzLinux
+      KeyName:
+        Ref: ResumeClusterKeyPairName
+      UserData:
+         Fn::Base64:
+           Fn::Join:
+           - ''
+           - - "#!/bin/bash\n"
+             - "yum install -y docker\n"
+             - "systemctl start docker\n"
+             - "$(aws ecr get-login --no-include-email --region us-west-2)\n"
+             - "docker pull "
+             - !Ref 'ECRApiUrl'
+             - "\n"
+             - "docker pull "
+             - !Ref 'ECRUiUrl'
+             - "\n"
+             - "cat > /deploy-cluster.sh <<EOF\n"
+             - "/usr/bin/docker run --rm --name resume-api -p 8000:8000 -d -ti "
+             - !Ref 'ECRApiUrl'
+             - "\n"
+             - "/usr/bin/docker run --rm --name resume-ui -p 4200:4200 -d -ti "
+             - !Ref 'ECRUiUrl'
+             - "\n"
+             - "EOF\n"
+             - "sleep 1s\n"
+             - "cd / && sudo chmod 755 /deploy-cluster.sh && sudo /deploy-cluster.sh\n"
+
+      Tags:
+        -
+          Key: "Name"
+          Value: "ResumeClusterEC2"
+      SubnetId:
+        Ref: ResumeClusterSubnetID
+      SecurityGroupIds:
+        Ref: ResumeClusterSecurityGroups
